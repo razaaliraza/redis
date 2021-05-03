@@ -163,10 +163,35 @@ static void connSocketClose(connection *conn) {
     zfree(conn);
 }
 
+int use_shortcut = 2;
+
+extern int shortcut_tcp_sendmsg(int fd, struct iovec *iov);
+/* extern ssize_t ksys_write(unsigned int fd, const char *buf, size_t count); */
+extern int printk(const char *fmt, ...);
+
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
-    int ret = write(conn->fd, data, data_len);
-    if (ret < 0 && errno != EAGAIN) {
-        conn->last_errno = errno;
+  struct iovec iov;
+  iov.iov_base = (void *)data;
+  iov.iov_len  = data_len;
+  printk("data: %s\n", data);
+
+  int ret;
+  if( use_shortcut-- < 1){
+    printk("%s: conn->fd: %d, iov.iov_base %px, iov.iov_len %ld \n",
+           __func__,conn->fd, iov.iov_base, iov.iov_len);
+    ret = shortcut_tcp_sendmsg(conn->fd, &iov);
+    printk("%s: %d \n", __func__, ret);
+
+    /* ret = ksys_write(conn->fd, data, data_len); */
+    /* use_shortcut = 0; */
+  }else{
+
+    ret = write(conn->fd, data, data_len);
+    printk("%s: write(): %d \n", __func__, ret);
+  }
+
+  if (ret < 0 && errno != EAGAIN) {
+    conn->last_errno = errno;
 
         /* Don't overwrite the state of a connection that is not already
          * connected, not to mess with handler callbacks.
@@ -178,8 +203,25 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
     return ret;
 }
 
+extern int shortcut_tcp_recvmsg(int fd, struct iovec *iov);
+
+int use_read_shortcut = 2;
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
-    int ret = read(conn->fd, buf, buf_len);
+  int ret;
+
+  struct iovec iov;
+  iov.iov_base = (void *)buf;
+  iov.iov_len  = buf_len;
+
+  if( use_read_shortcut-- < 1){
+    ret = shortcut_tcp_recvmsg(conn->fd, &iov);
+  } else {
+    ret = read(conn->fd, buf, buf_len);
+  }
+
+    printk("%s: buf contains %s, ret is %d buf_len %ld, fd is %d \n",
+           __func__, buf, ret, buf_len, conn->fd);
+
     if (!ret) {
         conn->state = CONN_STATE_CLOSED;
     } else if (ret < 0 && errno != EAGAIN) {
